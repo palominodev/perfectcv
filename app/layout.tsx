@@ -18,7 +18,7 @@ export const metadata: Metadata = {
   openGraph: {
     title: "Perfect CV - Optimize your CV for any job offer",
     description: "Upload your CV and a job offer to get a perfectly optimized CV that passes ATS filters.",
-    url: "https://perfect-cv.com",
+    url: "https://makeperfectcv.vercel.app",
     siteName: "Perfect CV",
     images: [
       {
@@ -37,6 +37,17 @@ export const metadata: Metadata = {
     description: "Upload your CV and a job offer to get a perfectly optimized CV that passes ATS filters.",
     images: ["/imagen-open-graph-perfect-cv.png"],
   },
+  keywords: ["CV", "Resume", "ATS", "Job Offer", "Optimization", "AI", "Career"],
+  alternates: {
+    canonical: "https://makeperfectcv.vercel.app",
+  },
+};
+
+const jsonLd = {
+  "@context": "https://schema.org",
+  "@type": "WebSite",
+  name: "Perfect CV",
+  url: "https://makeperfectcv.vercel.app",
 };
 
 export default function RootLayout({
@@ -49,6 +60,10 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+        />
         {children}
       </body>
     </html>
