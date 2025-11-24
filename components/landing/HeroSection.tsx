@@ -3,6 +3,8 @@ import * as motion from "framer-motion/client";
 import { Button } from "@/components/ui/button";
 import { ArrowRight, Upload, FileText, Sparkles } from "lucide-react";
 
+import { ComingSoonModal } from "@/components/landing/ComingSoonModal";
+
 export function HeroSection() {
   return (
     <section className="relative overflow-hidden bg-background pt-16 md:pt-20 lg:pt-32">
@@ -42,13 +44,17 @@ export function HeroSection() {
             transition={{ duration: 0.5, delay: 0.3 }}
             className="mt-10 flex flex-col sm:flex-row gap-4 w-full sm:w-auto"
           >
-            <Button size="lg" className="h-12 px-8 text-base group">
-              Optimizar mi CV ahora
-              <ArrowRight className="ml-2 h-4 w-4 transition-transform group-hover:translate-x-1" />
-            </Button>
-            <Button variant="outline" size="lg" className="h-12 px-8 text-base">
-              Ver ejemplo
-            </Button>
+            <ComingSoonModal>
+              <Button size="lg" className="h-12 px-8 text-base group w-full sm:w-auto">
+                Optimizar mi CV ahora
+                <ArrowRight className="ml-2 h-4 w-4 transition-transform group-hover:translate-x-1" />
+              </Button>
+            </ComingSoonModal>
+            <ComingSoonModal>
+              <Button variant="outline" size="lg" className="h-12 px-8 text-base w-full sm:w-auto">
+                Ver ejemplo
+              </Button>
+            </ComingSoonModal>
           </motion.div>
 
           <motion.div 
