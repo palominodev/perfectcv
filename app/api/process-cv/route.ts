@@ -36,22 +36,31 @@ export async function POST(req: NextRequest) {
     const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
 
     const prompt = `
-      Actúa como un experto redactor de CVs y reclutador.
-      Tu tarea es optimizar el siguiente CV para que se ajuste perfectamente a la oferta de trabajo proporcionada.
-      
-      Oferta de Trabajo:
-      ${jobOffer}
+      Actúa como un reclutador experto y redactor de CVs profesional.
+Tu objetivo es reescribir y optimizar un CV existente ({cv_text}) para que tenga la máxima compatibilidad con una oferta de trabajo específica ({job_offer}).
 
-      CV Original:
-      ${cvText}
+**Contexto:**
+El candidato debe destacar por sus logros cuantificables y el uso de palabras clave exactas encontradas en la oferta para pasar los filtros ATS (Applicant Tracking Systems).
 
-      Instrucciones:
-      1. Analiza la oferta de trabajo para identificar palabras clave y habilidades requeridas.
-      2. Reescribe el CV para resaltar la experiencia y habilidades relevantes del candidato que coincidan con la oferta.
-      3. Mejora la redacción para que sea profesional, clara y orientada a logros.
-      4. Mantén la estructura general de un CV (Perfil, Experiencia, Educación, Habilidades), pero optimiza el contenido.
-      5. NO inventes información falsa, solo resalta y reformula lo que ya existe en el CV original.
-      6. La salida debe ser exclusivamente el contenido del CV en formato Markdown limpio. No incluyas explicaciones adicionales ni bloques de código markdown (\`\`\`).
+**Instrucciones de Redacción:**
+1.  **Análisis de Keywords:** Identifica las habilidades técnicas y blandas críticas en la {job_offer} e intégralas naturalmente en el perfil y la experiencia.
+2.  **Enfoque en Logros:** Transforma las listas de tareas en declaraciones de impacto. Usa verbos de acción fuertes (ej. Lideré, Desarrollé, Incrementé) .
+3.  **Veracidad:** Basa todo el contenido estrictamente en la información provista en {cv_text}. Si falta una habilidad requerida, resalta habilidades transferibles existentes sin fabricar datos.
+4.  **Formato de Salida:** Genera únicamente el CV en formato Markdown limpio.
+
+**Ejemplo de Estilo (One-Shot):**
+* *Entrada (Original):* "Encargado de ventas y hablar con clientes."
+* *Salida (Mejorada):* "Gestioné una cartera de 50+ clientes clave, incrementando la retención en un 15% anual mediante estrategias de comunicación efectiva."
+
+**Datos de Entrada:**
+
+--- OFERTA DE TRABAJO ---
+${jobOffer}
+
+--- CV ORIGINAL ---
+${cvText}
+
+**Salida:**
     `;
 
     const result = await model.generateContent(prompt);
@@ -84,6 +93,135 @@ export async function POST(req: NextRequest) {
         return true;
       }
       return false;
+    };
+
+    // Advanced Markdown Analysis and Rendering for Tables
+    interface MarkdownSegment {
+      text: string;
+      style: 'bold' | 'italic' | 'code' | 'normal';
+    }
+
+    interface CellAnalysis {
+      original: string;
+      hasMarkdown: boolean;
+      isValid: boolean;
+      segments: MarkdownSegment[];
+      error?: string;
+    }
+
+    const analyzeCellContent = (text: string): CellAnalysis => {
+      // 1. Identify patterns
+      const hasBold = /\*\*.*?\*\*/.test(text);
+      const hasItalic = /(?<!\*)\*[^*]+\*(?!\*)/.test(text); // Single asterisks not part of double
+      const hasCode = /`.*?`/.test(text);
+      const hasMarkdown = hasBold || hasItalic || hasCode;
+
+      if (!hasMarkdown) {
+        return {
+          original: text,
+          hasMarkdown: false,
+          isValid: true,
+          segments: [{ text, style: 'normal' }]
+        };
+      }
+
+      // 2. Verify structure (simple validation)
+      // Check for unbalanced markers
+      const boldCount = (text.match(/\*\*/g) || []).length;
+      const codeCount = (text.match(/`/g) || []).length;
+      
+      let isValid = true;
+      let error = undefined;
+
+      if (boldCount % 2 !== 0) {
+        isValid = false;
+        error = "Unbalanced bold markers (**)";
+      } else if (codeCount % 2 !== 0) {
+        isValid = false;
+        error = "Unbalanced code markers (`)";
+      }
+
+      // Use the existing logic to parse if valid, or treat as plain text if invalid
+      let segments: MarkdownSegment[] = [];
+      if (isValid) {
+        // Reuse the logic from processInlineMarkdown but refined
+        segments = processInlineMarkdown(text) as MarkdownSegment[];
+      } else {
+        segments = [{ text, style: 'normal' }];
+      }
+
+      return {
+        original: text,
+        hasMarkdown,
+        isValid,
+        segments,
+        error
+      };
+    };
+
+    // Helper to wrap styled text into lines that fit the column width
+    const wrapStyledText = (segments: MarkdownSegment[], maxWidth: number, fontSize: number): MarkdownSegment[][] => {
+      const lines: MarkdownSegment[][] = [];
+      let currentLine: MarkdownSegment[] = [];
+      let currentLineWidth = 0;
+      const spaceWidth = doc.getStringUnitWidth(' ') * fontSize / doc.internal.scaleFactor;
+
+      segments.forEach(segment => {
+        // Set font for measurement
+        if (segment.style === 'bold') doc.setFont("helvetica", "bold");
+        else if (segment.style === 'italic') doc.setFont("helvetica", "italic");
+        else if (segment.style === 'code') doc.setFont("courier", "normal");
+        else doc.setFont("helvetica", "normal");
+
+        const words = segment.text.split(' ');
+        
+        words.forEach((word, wordIndex) => {
+          const wordWidth = doc.getStringUnitWidth(word) * fontSize / doc.internal.scaleFactor;
+          
+          // Add space width if not the first word in the segment
+          const additionalWidth = (wordIndex > 0 || currentLine.length > 0) ? spaceWidth : 0;
+          
+          if (currentLineWidth + additionalWidth + wordWidth > maxWidth) {
+            // Push current line and start new one
+            if (currentLine.length > 0) {
+              lines.push(currentLine);
+              currentLine = [];
+              currentLineWidth = 0;
+            }
+            
+            // If word itself is too long, we might need to split it (basic char splitting could be added here)
+            // For now, we put it on the next line
+            currentLine.push({ text: word, style: segment.style });
+            currentLineWidth = wordWidth;
+          } else {
+            // Add to current line
+            if (currentLine.length > 0 || wordIndex > 0) {
+               // We need to handle spaces carefully. 
+               // For simplicity in this structure, we append the space to the previous item or start of this one.
+               // Better: Add a separate space segment or prepend space to word
+               if (currentLineWidth > 0) {
+                 // Append space to the last element of currentLine if possible, or add a space segment
+                 // But wait, segments have styles. A space should inherit style or be neutral.
+                 // Let's just prepend space to the word text if it's not the start of line
+                 currentLine.push({ text: ' ' + word, style: segment.style });
+                 currentLineWidth += spaceWidth + wordWidth;
+               } else {
+                 currentLine.push({ text: word, style: segment.style });
+                 currentLineWidth += wordWidth;
+               }
+            } else {
+              currentLine.push({ text: word, style: segment.style });
+              currentLineWidth += wordWidth;
+            }
+          }
+        });
+      });
+
+      if (currentLine.length > 0) {
+        lines.push(currentLine);
+      }
+
+      return lines;
     };
 
     // Helper function to process inline markdown (bold, italic, code)
@@ -223,15 +361,56 @@ export async function POST(req: NextRequest) {
       
       let currentY = startY;
 
+      // Report analysis data
+      const analysisReport: { row: number, col: number, analysis: CellAnalysis }[] = [];
+
+      // Helper to render a cell with markdown support
+      const renderCell = (cellText: string, x: number, y: number, width: number, fontSize: number, isHeader: boolean) => {
+        const analysis = analyzeCellContent(cellText);
+        
+        // Store analysis for report (only if interesting)
+        if (analysis.hasMarkdown || !analysis.isValid) {
+           // We can't easily get absolute row/col index here without passing it, but this is for internal logic
+        }
+
+        const segments = analysis.isValid ? analysis.segments : [{ text: cellText, style: 'normal' }];
+        const wrappedLines = wrapStyledText(segments as MarkdownSegment[], width, fontSize);
+        
+        let lineY = y + (fontSize * 0.4); // Baseline offset
+
+        wrappedLines.forEach(lineSegments => {
+          let currentX = x;
+          lineSegments.forEach(segment => {
+            if (segment.style === 'bold') {
+              doc.setFont("helvetica", "bold");
+            } else if (segment.style === 'italic') {
+              doc.setFont("helvetica", "italic");
+            } else if (segment.style === 'code') {
+              doc.setFont("courier", "normal");
+              // Code often needs slightly smaller font
+            } else {
+              doc.setFont("helvetica", isHeader ? "bold" : "normal");
+            }
+            
+            doc.text(segment.text, currentX, lineY);
+            currentX += doc.getTextWidth(segment.text);
+          });
+          lineY += 4; // Line height
+        });
+      };
+
       // Function to calculate row height based on content
-      const getRowHeight = (row: string[]) => {
+      const getRowHeight = (row: string[], fontSize: number) => {
         let maxLines = 1;
         row.forEach((cell, index) => {
            // Handle case where row has fewer columns than header
            if (index >= numColumns) return; 
            
            const textWidth = columnWidth - (cellPadding * 2);
-           const lines = doc.splitTextToSize(cell, textWidth);
+           const analysis = analyzeCellContent(cell);
+           const segments = analysis.isValid ? analysis.segments : [{ text: cell, style: 'normal' }];
+           const lines = wrapStyledText(segments as MarkdownSegment[], textWidth, fontSize);
+           
            if (lines.length > maxLines) maxLines = lines.length;
         });
         // Line height factor (approx 1.15 * fontSize) + padding
@@ -241,14 +420,14 @@ export async function POST(req: NextRequest) {
 
       // Draw Header function
       const drawHeader = (y: number) => {
-        const rowHeight = getRowHeight(headerRow);
+        const rowHeight = getRowHeight(headerRow, 9);
         
         // Background
         doc.setFillColor(240, 240, 240);
         doc.rect(margin + 5, y, tableWidth, rowHeight, 'F');
         
         doc.setFontSize(9);
-        doc.setFont("helvetica", "bold");
+        // Font style is handled per segment in renderCell, but default for header is bold
         doc.setTextColor(...colors.accent);
         
         // Borders (Outer rect for this row)
@@ -266,15 +445,16 @@ export async function POST(req: NextRequest) {
           if (colIndex >= numColumns) return;
           const x = margin + 5 + (colIndex * columnWidth) + cellPadding;
           const textWidth = columnWidth - (cellPadding * 2);
-          const lines = doc.splitTextToSize(cell, textWidth);
-          doc.text(lines, x, y + 5); // +5 baseline offset
+          
+          // Use renderCell instead of simple text
+          renderCell(cell, x, y + 5, textWidth, 9, true);
         });
         
         return rowHeight;
       };
 
       // Calculate header height to check page break for initial render
-      const initialHeaderHeight = getRowHeight(headerRow);
+      const initialHeaderHeight = getRowHeight(headerRow, 9);
       
       // Check if we need a new page for the start of the table
       if (currentY + initialHeaderHeight > pageHeight - margin) {
@@ -286,13 +466,12 @@ export async function POST(req: NextRequest) {
       currentY += drawHeader(currentY);
 
       // Draw Data Rows
-      doc.setFont("helvetica", "normal");
       doc.setTextColor(...colors.text);
       doc.setFontSize(8);
 
       for (let rowIndex = 1; rowIndex < rows.length; rowIndex++) {
         const row = rows[rowIndex];
-        const rowHeight = getRowHeight(row);
+        const rowHeight = getRowHeight(row, 8);
 
         // Check Page Break
         if (currentY + rowHeight > pageHeight - margin) {
@@ -303,7 +482,6 @@ export async function POST(req: NextRequest) {
           currentY += drawHeader(currentY);
           
           // Reset font for data
-          doc.setFont("helvetica", "normal");
           doc.setTextColor(...colors.text);
           doc.setFontSize(8);
         }
@@ -330,11 +508,30 @@ export async function POST(req: NextRequest) {
           if (colIndex >= numColumns) return;
           const x = margin + 5 + (colIndex * columnWidth) + cellPadding;
           const textWidth = columnWidth - (cellPadding * 2);
-          const lines = doc.splitTextToSize(cell, textWidth);
-          doc.text(lines, x, currentY + 5);
+          
+          // Analyze and log for report
+          const analysis = analyzeCellContent(cell);
+          if (analysis.hasMarkdown || !analysis.isValid) {
+            analysisReport.push({ row: rowIndex, col: colIndex, analysis });
+          }
+
+          renderCell(cell, x, currentY + 5, textWidth, 8, false);
         });
 
         currentY += rowHeight;
+      }
+
+      // Log analysis report to console (server-side)
+      if (analysisReport.length > 0) {
+        console.log("Markdown Table Analysis Report:");
+        analysisReport.forEach(item => {
+          console.log(`Row ${item.row}, Col ${item.col}:`);
+          console.log(`  Original: "${item.analysis.original}"`);
+          console.log(`  Valid: ${item.analysis.isValid}`);
+          if (!item.analysis.isValid) console.log(`  Error: ${item.analysis.error}`);
+          console.log(`  Segments: ${JSON.stringify(item.analysis.segments)}`);
+          console.log("---");
+        });
       }
 
       return currentY + 5;
