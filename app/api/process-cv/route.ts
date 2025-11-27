@@ -191,96 +191,150 @@ export async function POST(req: NextRequest) {
     const renderTable = (tableLines: string[], startY: number) => {
       if (tableLines.length < 2) return startY; // Need at least header and separator
 
+      // Improved parsing logic for Markdown tables
+      const parseRow = (line: string) => {
+        const cells = line.split('|');
+        // Remove first and last empty strings if they exist (common in markdown tables like | a | b |)
+        if (cells.length > 1 && cells[0].trim() === '') cells.shift();
+        if (cells.length > 1 && cells[cells.length - 1].trim() === '') cells.pop();
+        return cells.map(c => c.trim());
+      };
+
       // Parse table structure
       const rows: string[][] = [];
-      const headerRow = tableLines[0]
-        .split('|')
-        .map(cell => cell.trim())
-        .filter(cell => cell.length > 0);
-      
+      const headerRow = parseRow(tableLines[0]);
       rows.push(headerRow);
 
       // Skip separator line (tableLines[1]) and parse data rows
       for (let i = 2; i < tableLines.length; i++) {
-        const cells = tableLines[i]
-          .split('|')
-          .map(cell => cell.trim())
-          .filter(cell => cell.length > 0);
-        if (cells.length > 0) {
+        const cells = parseRow(tableLines[i]);
+        // Only add if it has content (flexible check)
+        if (cells.some(c => c.length > 0)) {
           rows.push(cells);
         }
       }
 
       const numColumns = headerRow.length;
+      if (numColumns === 0) return startY;
+
       const tableWidth = maxWidth - 10;
       const columnWidth = tableWidth / numColumns;
-      const rowHeight = 7;
       const cellPadding = 2;
-
+      
       let currentY = startY;
 
-      // Check if entire table fits on current page, otherwise add new page
-      const tableHeight = rows.length * rowHeight + 5;
-      checkPageBreak(tableHeight, true);
-      currentY = yPosition;
+      // Function to calculate row height based on content
+      const getRowHeight = (row: string[]) => {
+        let maxLines = 1;
+        row.forEach((cell, index) => {
+           // Handle case where row has fewer columns than header
+           if (index >= numColumns) return; 
+           
+           const textWidth = columnWidth - (cellPadding * 2);
+           const lines = doc.splitTextToSize(cell, textWidth);
+           if (lines.length > maxLines) maxLines = lines.length;
+        });
+        // Line height factor (approx 1.15 * fontSize) + padding
+        const lineHeight = 4; 
+        return (maxLines * lineHeight) + 6; // +6 for top/bottom padding
+      };
 
-      // Draw header row with background
-      doc.setFillColor(240, 240, 240);
-      doc.rect(margin + 5, currentY - 5, tableWidth, rowHeight, 'F');
+      // Draw Header function
+      const drawHeader = (y: number) => {
+        const rowHeight = getRowHeight(headerRow);
+        
+        // Background
+        doc.setFillColor(240, 240, 240);
+        doc.rect(margin + 5, y, tableWidth, rowHeight, 'F');
+        
+        doc.setFontSize(9);
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(...colors.accent);
+        
+        // Borders (Outer rect for this row)
+        doc.setDrawColor(...colors.secondary);
+        doc.setLineWidth(0.2);
+        doc.rect(margin + 5, y, tableWidth, rowHeight);
+        
+        // Vertical lines
+        for (let i = 1; i < numColumns; i++) {
+          const lineX = margin + 5 + (i * columnWidth);
+          doc.line(lineX, y, lineX, y + rowHeight);
+        }
+
+        headerRow.forEach((cell, colIndex) => {
+          if (colIndex >= numColumns) return;
+          const x = margin + 5 + (colIndex * columnWidth) + cellPadding;
+          const textWidth = columnWidth - (cellPadding * 2);
+          const lines = doc.splitTextToSize(cell, textWidth);
+          doc.text(lines, x, y + 5); // +5 baseline offset
+        });
+        
+        return rowHeight;
+      };
+
+      // Calculate header height to check page break for initial render
+      const initialHeaderHeight = getRowHeight(headerRow);
       
-      doc.setFontSize(9);
-      doc.setFont("helvetica", "bold");
-      doc.setTextColor(...colors.accent);
+      // Check if we need a new page for the start of the table
+      if (currentY + initialHeaderHeight > pageHeight - margin) {
+        doc.addPage();
+        currentY = margin;
+      }
 
-      headerRow.forEach((cell, colIndex) => {
-        const x = margin + 5 + (colIndex * columnWidth) + cellPadding;
-        const cellText = doc.splitTextToSize(cell, columnWidth - (cellPadding * 2));
-        doc.text(cellText[0] || '', x, currentY, { maxWidth: columnWidth - (cellPadding * 2) });
-      });
+      // Draw Header initially
+      currentY += drawHeader(currentY);
 
-      currentY += rowHeight;
-
-      // Draw data rows
+      // Draw Data Rows
       doc.setFont("helvetica", "normal");
       doc.setTextColor(...colors.text);
       doc.setFontSize(8);
 
       for (let rowIndex = 1; rowIndex < rows.length; rowIndex++) {
         const row = rows[rowIndex];
-        
-        // Alternate row background for better readability
-        if (rowIndex % 2 === 0) {
-          doc.setFillColor(250, 250, 250);
-          doc.rect(margin + 5, currentY - 5, tableWidth, rowHeight, 'F');
+        const rowHeight = getRowHeight(row);
+
+        // Check Page Break
+        if (currentY + rowHeight > pageHeight - margin) {
+          doc.addPage();
+          currentY = margin;
+          
+          // Redraw header on new page
+          currentY += drawHeader(currentY);
+          
+          // Reset font for data
+          doc.setFont("helvetica", "normal");
+          doc.setTextColor(...colors.text);
+          doc.setFontSize(8);
         }
 
+        // Alternate row background
+        if (rowIndex % 2 === 0) {
+          doc.setFillColor(250, 250, 250);
+          doc.rect(margin + 5, currentY, tableWidth, rowHeight, 'F');
+        }
+
+        // Draw Borders for this row
+        doc.setDrawColor(...colors.secondary);
+        doc.setLineWidth(0.2);
+        doc.rect(margin + 5, currentY, tableWidth, rowHeight);
+        
+        // Vertical lines
+        for (let i = 1; i < numColumns; i++) {
+          const lineX = margin + 5 + (i * columnWidth);
+          doc.line(lineX, currentY, lineX, currentY + rowHeight);
+        }
+
+        // Draw Content
         row.forEach((cell, colIndex) => {
+          if (colIndex >= numColumns) return;
           const x = margin + 5 + (colIndex * columnWidth) + cellPadding;
-          const cellText = doc.splitTextToSize(cell, columnWidth - (cellPadding * 2));
-          doc.text(cellText[0] || '', x, currentY, { maxWidth: columnWidth - (cellPadding * 2) });
+          const textWidth = columnWidth - (cellPadding * 2);
+          const lines = doc.splitTextToSize(cell, textWidth);
+          doc.text(lines, x, currentY + 5);
         });
 
         currentY += rowHeight;
-      }
-
-      // Draw table borders
-      doc.setDrawColor(...colors.secondary);
-      doc.setLineWidth(0.2);
-      
-      // Outer border
-      doc.rect(margin + 5, startY - 5, tableWidth, currentY - startY);
-      
-      // Column separators
-      for (let i = 1; i < numColumns; i++) {
-        const x = margin + 5 + (i * columnWidth);
-        doc.line(x, startY - 5, x, currentY);
-      }
-      
-      // Row separators
-      let separatorY = startY - 5;
-      for (let i = 0; i <= rows.length; i++) {
-        doc.line(margin + 5, separatorY, margin + 5 + tableWidth, separatorY);
-        separatorY += rowHeight;
       }
 
       return currentY + 5;
